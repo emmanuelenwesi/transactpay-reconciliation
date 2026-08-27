@@ -1,0 +1,164 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TransactPay Reconciliation Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background-color: #f8f9fa; }
+    .card { border-radius: 10px; border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+    .metric-title { font-size: 0.8rem; font-weight: 700; color: #6c757d; text-transform: uppercase; }
+    .metric-value { font-size: 1.6rem; font-weight: 800; color: #212529; }
+    .modal-content { border-radius: 12px; }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navbar -->
+  <nav class="navbar navbar-dark bg-dark px-4 py-3">
+    <a class="navbar-brand fw-bold" href="#">TransactPay Reconciliation</a>
+    <div class="d-flex align-items-center gap-3">
+      <span id="merchant-welcome" class="text-light fw-medium" style="display: none;"></span>
+      <button id="btn-sync" class="btn btn-sm btn-outline-success" style="display: none;">Sync TransactPay API</button>
+      <button id="btn-auth-action" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#authModal">Login / Register</button>
+    </div>
+  </nav>
+
+  <div class="container my-4">
+
+    <!-- Summary Metrics Cards -->
+    <div class="row g-3 mb-4">
+      <div class="col-md-3">
+        <div class="card p-3">
+          <div class="metric-title">Total Gross Amount</div>
+          <div class="metric-value text-primary" id="metric-gross">₦0.00</div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="card p-3">
+          <div class="metric-title">Total Gateway Fees</div>
+          <div class="metric-value text-danger" id="metric-fees">₦0.00</div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="card p-3">
+          <div class="metric-title">Total Net Settled</div>
+          <div class="metric-value text-success" id="metric-net">₦0.00</div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="card p-3">
+          <div class="metric-title">Discrepancies</div>
+          <div class="metric-value text-warning" id="metric-discrepancies">0</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Controls Section -->
+    <div class="row g-3 mb-4">
+      <div class="col-md-4">
+        <div class="card p-3">
+          <h6 class="fw-bold mb-3">Upload Settlement CSV</h6>
+          <form id="upload-form" class="d-flex gap-2">
+            <input type="file" id="csv-file" class="form-control" accept=".csv" required>
+            <button type="submit" class="btn btn-primary px-3">Upload</button>
+          </form>
+        </div>
+      </div>
+      <div class="col-md-8">
+        <div class="card p-3">
+          <h6 class="fw-bold mb-3">Filter & Export Settlements</h6>
+          <div class="d-flex gap-2">
+            <input type="text" id="search-input" class="form-control" placeholder="Search by email, reference, status, or channel...">
+            <button id="btn-export-csv" class="btn btn-success px-4 text-nowrap">Export Filtered CSV</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert Banner -->
+    <div id="alert-banner" class="alert d-none" role="alert"></div>
+
+    <!-- Transactions Table -->
+    <div class="card p-3">
+      <h6 class="fw-bold mb-3">Settlement History</h6>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle" id="transactions-table">
+          <thead class="table-light">
+            <tr>
+              <th>Ref</th>
+              <th>Customer Email</th>
+              <th>Channel</th>
+              <th>Gross</th>
+              <th>Fee</th>
+              <th>Net Amount</th>
+              <th>Status</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+          <tbody id="transactions-body">
+            <tr><td colspan="8" class="text-center text-muted">Please login to view transactions.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Authentication Modal -->
+  <div class="modal fade" id="authModal" tabindex="-1" aria-labelledby="authModalLabel" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold" id="authModalLabel">Merchant Login</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <form id="auth-form">
+            <div id="auth-error" class="alert alert-danger d-none" role="alert"></div>
+
+            <div class="mb-3" id="group-name" style="display: none;">
+              <label class="form-label">Merchant Name</label>
+              <input type="text" id="auth-name" class="form-control" placeholder="Merchant Name">
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">Email Address</label>
+              <input type="email" id="auth-email" class="form-control" placeholder="admin@merchant.com" required>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">Password</label>
+              <input type="password" id="auth-password" class="form-control" required>
+            </div>
+
+            <div id="group-api-keys" style="display: none;">
+              <div class="mb-3">
+                <label class="form-label">TransactPay Secret Key</label>
+                <input type="password" id="auth-secret-key" class="form-control" placeholder="tp_sk_live_...">
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Environment</label>
+                <select id="auth-environment" class="form-select">
+                  <option value="sandbox">Sandbox</option>
+                  <option value="live">Live</option>
+                </select>
+              </div>
+            </div>
+
+            <button type="submit" id="btn-auth-submit" class="btn btn-primary w-100 py-2">Login</button>
+          </form>
+
+          <div class="text-center mt-3">
+            <small id="toggle-auth-mode" class="text-primary" style="cursor: pointer;">Don't have an account? Register</small>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
