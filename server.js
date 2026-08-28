@@ -13,7 +13,6 @@ const PDFDocument = require('pdfkit');
 const pool = require('./db');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_cyber4rall';
 
 // Middleware
@@ -53,7 +52,6 @@ const authenticateToken = (req, res, next) => {
 const authorizeRoles = (...allowedRoles) => {
   return (req, res, next) => {
     if (!req.merchant || !req.merchant.role) {
-      // Default fallback to Merchant Admin for basic merchants
       const role = req.merchant?.role || 'Merchant Admin';
       if (!allowedRoles.includes(role)) {
         return res.status(403).json({ error: 'Forbidden: Insufficient permissions.' });
@@ -487,58 +485,65 @@ app.patch('/api/reconciliation/:id/resolve', authenticateToken, authorizeRoles('
 // ==========================================
 // AUTOMATED DAILY API SYNC CRON JOB (MIDNIGHT)
 // ==========================================
-cron.schedule('0 0 * * *', async () => {
-  console.log('[CRON] Starting automated daily settlement sync for all merchants...');
+if (process.env.NODE_ENV !== 'test') {
+  cron.schedule('0 0 * * *', async () => {
+    console.log('[CRON] Starting automated daily settlement sync for all merchants...');
 
-  try {
-    const merchants = await pool.query('SELECT id, secret_key, environment FROM merchants WHERE secret_key IS NOT NULL AND secret_key != \'\';');
+    try {
+      const merchants = await pool.query('SELECT id, secret_key, environment FROM merchants WHERE secret_key IS NOT NULL AND secret_key != \'\';');
 
-    for (const merchant of merchants.rows) {
-      const baseUrl = merchant.environment === 'live'
-        ? 'https://api.transactpay.ai/v1'
-        : 'https://sandbox-api.transactpay.ai/v1';
+      for (const merchant of merchants.rows) {
+        const baseUrl = merchant.environment === 'live'
+          ? 'https://api.transactpay.ai/v1'
+          : 'https://sandbox-api.transactpay.ai/v1';
 
-      try {
-        const tpResponse = await fetch(`${baseUrl}/transactions`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${merchant.secret_key}`,
-            'Content-Type': 'application/json'
+        try {
+          const tpResponse = await fetch(`${baseUrl}/transactions`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${merchant.secret_key}`,
+              'Content-Type': 'application/json'
+            }
+          });
+
+          if (tpResponse.ok) {
+            const tpData = await tpResponse.json();
+            const transactions = tpData.data || [];
+
+            for (const tx of transactions) {
+              const gross = parseFloat(tx.amount) || 0;
+              const fee = parseFloat(tx.fee) || 0;
+              const net = gross - fee;
+
+              await pool.query(
+                `INSERT INTO transactions (transaction_ref, customer_email, channel, gross_amount, fee, net_amount, status, merchant_id, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamp, NOW()))
+                 ON CONFLICT (transaction_ref) DO UPDATE SET
+                   status = EXCLUDED.status,
+                   gross_amount = EXCLUDED.gross_amount,
+                   fee = EXCLUDED.fee,
+                   net_amount = EXCLUDED.net_amount;`,
+                [tx.reference || tx.id, tx.customer ? tx.customer.email : 'N/A', tx.channel || 'API', gross, fee, net, tx.status || 'success', merchant.id, tx.created_at]
+              );
+            }
+            console.log(`[CRON] Successfully synced merchant ID: ${merchant.id}`);
           }
-        });
-
-        if (tpResponse.ok) {
-          const tpData = await tpResponse.json();
-          const transactions = tpData.data || [];
-
-          for (const tx of transactions) {
-            const gross = parseFloat(tx.amount) || 0;
-            const fee = parseFloat(tx.fee) || 0;
-            const net = gross - fee;
-
-            await pool.query(
-              `INSERT INTO transactions (transaction_ref, customer_email, channel, gross_amount, fee, net_amount, status, merchant_id, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamp, NOW()))
-               ON CONFLICT (transaction_ref) DO UPDATE SET
-                 status = EXCLUDED.status,
-                 gross_amount = EXCLUDED.gross_amount,
-                 fee = EXCLUDED.fee,
-                 net_amount = EXCLUDED.net_amount;`,
-              [tx.reference || tx.id, tx.customer ? tx.customer.email : 'N/A', tx.channel || 'API', gross, fee, net, tx.status || 'success', merchant.id, tx.created_at]
-            );
-          }
-          console.log(`[CRON] Successfully synced merchant ID: ${merchant.id}`);
+        } catch (mErr) {
+          console.error(`[CRON] Failed sync for merchant ID ${merchant.id}:`, mErr.message);
         }
-      } catch (mErr) {
-        console.error(`[CRON] Failed sync for merchant ID ${merchant.id}:`, mErr.message);
       }
+    } catch (err) {
+      console.error('[CRON] Execution error:', err);
     }
-  } catch (err) {
-    console.error('[CRON] Execution error:', err);
-  }
-});
+  });
+}
 
-// Start Server (Must be at the very end)
-app.listen(PORT, () => {
-  console.log(`Reconciliation backend running securely on port ${PORT}`);
-});
+// Only start the server if called directly (not when required by Jest)
+if (require.main === module) {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => {
+    console.log(`Reconciliation backend running securely on port ${PORT}`);
+  });
+}
+
+module.exports = app;
