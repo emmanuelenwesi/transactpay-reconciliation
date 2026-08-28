@@ -288,6 +288,39 @@ app.post('/api/sync-transactpay', authenticateToken, async (req, res) => {
   }
 });
 
+// Webhook endpoint for real-time transaction ingestion
+app.post('/api/webhooks/transactpay', async (req, res) => {
+  const secret = process.env.JWT_SECRET || 'your_jwt_secret_key_here';
+  const signature = req.headers['x-transactpay-signature'];
+
+  // Verify HMAC-SHA256 signature header
+  const computedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(JSON.stringify(req.body))
+    .digest('hex');
+
+  if (signature !== computedSignature) {
+    return res.status(401).json({ error: 'Invalid HMAC signature header' });
+  }
+
+  const { merchant_id, transaction_ref, gross_amount, fee_amount, net_amount, status } = req.body;
+
+  try {
+    await db.query(
+      `INSERT INTO transactions (merchant_id, transaction_ref, gross_amount, fee_amount, net_amount, status)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (transaction_ref) DO UPDATE 
+       SET status = EXCLUDED.status, net_amount = EXCLUDED.net_amount`,
+      [merchant_id, transaction_ref, gross_amount, fee_amount, net_amount, status || 'success']
+    );
+
+    res.status(200).json({ status: 'success', message: 'Webhook processed successfully' });
+  } catch (err) {
+    console.error('Webhook insertion error:', err);
+    res.status(500).json({ error: 'Database transaction processing failed' });
+  }
+});
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`Reconciliation backend running securely on port ${PORT}`);
