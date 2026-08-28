@@ -7,6 +7,9 @@ const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const ExcelJS = require('exceljs');
+const PDFDocument = require('pdfkit');
 const pool = require('./db');
 
 const app = express();
@@ -26,8 +29,9 @@ if (!fs.existsSync('uploads')) {
 }
 
 // ==========================================
-// JWT AUTHENTICATION MIDDLEWARE
+// AUTHENTICATION & RBAC MIDDLEWARE
 // ==========================================
+
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
@@ -40,9 +44,29 @@ const authenticateToken = (req, res, next) => {
     if (err) {
       return res.status(403).json({ error: 'Invalid or expired token.' });
     }
-    req.merchant = user; // Contains { merchant_id, email, name }
+    req.merchant = user; // Contains { merchant_id, email, name, role }
     next();
   });
+};
+
+// Role-Based Access Control (RBAC) Guard
+const authorizeRoles = (...allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.merchant || !req.merchant.role) {
+      // Default fallback to Merchant Admin for basic merchants
+      const role = req.merchant?.role || 'Merchant Admin';
+      if (!allowedRoles.includes(role)) {
+        return res.status(403).json({ error: 'Forbidden: Insufficient permissions.' });
+      }
+      return next();
+    }
+
+    if (!allowedRoles.includes(req.merchant.role)) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions.' });
+    }
+
+    next();
+  };
 };
 
 // ==========================================
@@ -51,7 +75,7 @@ const authenticateToken = (req, res, next) => {
 
 // Merchant Registration
 app.post('/api/auth/register', async (req, res) => {
-  const { name, email, password, api_key, secret_key, environment } = req.body;
+  const { name, email, password, api_key, secret_key, environment, role } = req.body;
 
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Name, email, and password are required.' });
@@ -74,13 +98,15 @@ app.post('/api/auth/register', async (req, res) => {
     );
 
     const merchant = result.rows[0];
+    const userRole = role || 'Merchant Admin';
+
     const token = jwt.sign(
-      { merchant_id: merchant.id, email: merchant.email, name: merchant.name },
+      { merchant_id: merchant.id, email: merchant.email, name: merchant.name, role: userRole },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    res.status(201).json({ token, merchant });
+    res.status(201).json({ token, merchant: { ...merchant, role: userRole } });
   } catch (err) {
     console.error('Error during merchant registration:', err);
     res.status(500).json({ error: 'Failed to register merchant.' });
@@ -107,8 +133,10 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
+    const userRole = merchant.role || 'Merchant Admin';
+
     const token = jwt.sign(
-      { merchant_id: merchant.id, email: merchant.email, name: merchant.name },
+      { merchant_id: merchant.id, email: merchant.email, name: merchant.name, role: userRole },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
@@ -119,7 +147,8 @@ app.post('/api/auth/login', async (req, res) => {
         id: merchant.id,
         name: merchant.name,
         email: merchant.email,
-        environment: merchant.environment
+        environment: merchant.environment,
+        role: userRole
       }
     });
   } catch (err) {
@@ -181,7 +210,7 @@ app.post('/api/upload', authenticateToken, upload.single('file'), async (req, re
           const email = row.customer_email || row.email || 'N/A';
           const channel = row.channel || 'Web';
           const gross = parseFloat(row.gross_amount || row.amount || 0);
-          const fee = parseFloat(row.fee || 0);
+          const fee = parseFloat(row.fee || row.fee_amount || 0);
           const net = parseFloat(row.net_amount || (gross - fee));
           const status = row.status || 'success';
           const createdAt = row.created_at || new Date();
@@ -191,10 +220,10 @@ app.post('/api/upload', authenticateToken, upload.single('file'), async (req, re
               `INSERT INTO transactions (transaction_ref, customer_email, channel, gross_amount, fee, net_amount, status, merchant_id, created_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamp, NOW()))
                ON CONFLICT (transaction_ref) DO UPDATE SET
-                  status = EXCLUDED.status,
-                  gross_amount = EXCLUDED.gross_amount,
-                  fee = EXCLUDED.fee,
-                  net_amount = EXCLUDED.net_amount;`,
+                 status = EXCLUDED.status,
+                 gross_amount = EXCLUDED.gross_amount,
+                 fee = EXCLUDED.fee,
+                 net_amount = EXCLUDED.net_amount;`,
               [ref, email, channel, gross, fee, net, status, merchantId, createdAt]
             );
             inserted++;
@@ -215,7 +244,7 @@ app.post('/api/upload', authenticateToken, upload.single('file'), async (req, re
 });
 
 // ==========================================
-// 3. SECURE TRANSACTPAY AUTOMATED API SYNC
+// 3. SECURE TRANSACTPAY AUTOMATED API SYNC & WEBHOOKS
 // ==========================================
 
 app.post('/api/sync-transactpay', authenticateToken, async (req, res) => {
@@ -262,10 +291,10 @@ app.post('/api/sync-transactpay', authenticateToken, async (req, res) => {
         `INSERT INTO transactions (transaction_ref, customer_email, channel, gross_amount, fee, net_amount, status, merchant_id, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamp, NOW()))
          ON CONFLICT (transaction_ref) DO UPDATE SET
-            status = EXCLUDED.status,
-            gross_amount = EXCLUDED.gross_amount,
-            fee = EXCLUDED.fee,
-            net_amount = EXCLUDED.net_amount;`,
+           status = EXCLUDED.status,
+           gross_amount = EXCLUDED.gross_amount,
+           fee = EXCLUDED.fee,
+           net_amount = EXCLUDED.net_amount;`,
         [
           tx.reference || tx.id,
           tx.customer ? tx.customer.email : 'N/A',
@@ -288,12 +317,11 @@ app.post('/api/sync-transactpay', authenticateToken, async (req, res) => {
   }
 });
 
-// Webhook endpoint for real-time transaction ingestion
+// Webhook endpoint for real-time transaction ingestion (HMAC Signature Verified)
 app.post('/api/webhooks/transactpay', async (req, res) => {
-  const secret = process.env.JWT_SECRET || 'your_jwt_secret_key_here';
+  const secret = process.env.JWT_SECRET || JWT_SECRET;
   const signature = req.headers['x-transactpay-signature'];
 
-  // Verify HMAC-SHA256 signature header
   const computedSignature = crypto
     .createHmac('sha256', secret)
     .update(JSON.stringify(req.body))
@@ -303,15 +331,15 @@ app.post('/api/webhooks/transactpay', async (req, res) => {
     return res.status(401).json({ error: 'Invalid HMAC signature header' });
   }
 
-  const { merchant_id, transaction_ref, gross_amount, fee_amount, net_amount, status } = req.body;
+  const { merchant_id, transaction_ref, gross_amount, fee, net_amount, status } = req.body;
 
   try {
-    await db.query(
-      `INSERT INTO transactions (merchant_id, transaction_ref, gross_amount, fee_amount, net_amount, status)
+    await pool.query(
+      `INSERT INTO transactions (merchant_id, transaction_ref, gross_amount, fee, net_amount, status)
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (transaction_ref) DO UPDATE 
        SET status = EXCLUDED.status, net_amount = EXCLUDED.net_amount`,
-      [merchant_id, transaction_ref, gross_amount, fee_amount, net_amount, status || 'success']
+      [merchant_id, transaction_ref, gross_amount, fee || 0, net_amount, status || 'success']
     );
 
     res.status(200).json({ status: 'success', message: 'Webhook processed successfully' });
@@ -321,9 +349,139 @@ app.post('/api/webhooks/transactpay', async (req, res) => {
   }
 });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`Reconciliation backend running securely on port ${PORT}`);
+// ==========================================
+// 4. REPORTING & EXPORT ENGINE
+// ==========================================
+
+// Export reconciliation reports as Excel (.xlsx)
+app.get('/api/reports/export/excel', authenticateToken, authorizeRoles('Super Admin', 'Merchant Admin', 'Auditor'), async (req, res) => {
+  const merchant_id = req.merchant.merchant_id;
+  try {
+    const result = await pool.query(
+      'SELECT transaction_ref, gross_amount, fee, net_amount, status, created_at FROM transactions WHERE merchant_id = $1 ORDER BY created_at DESC',
+      [merchant_id]
+    );
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Reconciliation Report');
+
+    worksheet.columns = [
+      { header: 'Transaction Ref', key: 'transaction_ref', width: 25 },
+      { header: 'Gross Amount', key: 'gross_amount', width: 15 },
+      { header: 'Fee Amount', key: 'fee', width: 15 },
+      { header: 'Net Amount', key: 'net_amount', width: 15 },
+      { header: 'Status', key: 'status', width: 15 },
+      { header: 'Date', key: 'created_at', width: 20 }
+    ];
+
+    result.rows.forEach(row => worksheet.addRow(row));
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=reconciliation_report.xlsx');
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error('Excel export error:', err);
+    res.status(500).json({ error: 'Failed to generate Excel report' });
+  }
+});
+
+// Export reconciliation summary as PDF
+app.get('/api/reports/export/pdf', authenticateToken, authorizeRoles('Super Admin', 'Merchant Admin', 'Auditor'), async (req, res) => {
+  const merchant_id = req.merchant.merchant_id;
+  try {
+    const result = await pool.query(
+      'SELECT transaction_ref, gross_amount, fee, net_amount, status FROM transactions WHERE merchant_id = $1',
+      [merchant_id]
+    );
+
+    const doc = new PDFDocument();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename=settlement_summary.pdf');
+
+    doc.pipe(res);
+    doc.fontSize(20).text('TransactPay Settlement Summary', { align: 'center' });
+    doc.moveDown();
+
+    result.rows.forEach(t => {
+      doc.fontSize(12).text(`Ref: ${t.transaction_ref} | Gross: ₦${t.gross_amount} | Fee: ₦${t.fee} | Net: ₦${t.net_amount} | Status: ${t.status}`);
+    });
+
+    doc.end();
+  } catch (err) {
+    console.error('PDF export error:', err);
+    res.status(500).json({ error: 'Failed to generate PDF summary' });
+  }
+});
+
+// ==========================================
+// 5. DISCREPANCY EVALUATION & RESOLUTION ENGINE
+// ==========================================
+
+// Automatically evaluate fee variances (flag discrepancies if fee > 1.5% expected baseline)
+app.post('/api/reconciliation/evaluate-discrepancies', authenticateToken, authorizeRoles('Super Admin', 'Merchant Admin'), async (req, res) => {
+  const merchant_id = req.merchant.merchant_id;
+  const { expected_fee_percentage = 0.015 } = req.body;
+
+  try {
+    const transactions = await pool.query(
+      'SELECT id, gross_amount, fee FROM transactions WHERE merchant_id = $1 AND status != \'resolved\'',
+      [merchant_id]
+    );
+
+    let flaggedCount = 0;
+
+    for (const tx of transactions.rows) {
+      const expectedFee = Number(tx.gross_amount) * Number(expected_fee_percentage);
+      const feeVariance = Math.abs(Number(tx.fee) - expectedFee);
+
+      // Flag as discrepancy if variance exceeds 0.5% threshold
+      if (feeVariance > Number(tx.gross_amount) * 0.005) {
+        await pool.query(
+          `UPDATE transactions SET status = 'discrepancy' WHERE id = $1`,
+          [tx.id]
+        );
+        flaggedCount++;
+      }
+    }
+
+    res.status(200).json({ status: 'success', flagged_discrepancies: flaggedCount });
+  } catch (err) {
+    console.error('Discrepancy evaluation error:', err);
+    res.status(500).json({ error: 'Failed to evaluate transaction discrepancies' });
+  }
+});
+
+// Endpoint to resolve a flagged discrepancy
+app.patch('/api/reconciliation/:id/resolve', authenticateToken, authorizeRoles('Super Admin', 'Merchant Admin'), async (req, res) => {
+  const { id } = req.params;
+  const { resolution_notes } = req.body;
+  const resolved_by = req.merchant.email;
+
+  try {
+    const result = await pool.query(
+      `UPDATE transactions 
+       SET status = 'resolved' 
+       WHERE id = $1 AND merchant_id = $2 RETURNING *`,
+      [id, req.merchant.merchant_id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Transaction not found or unauthorized' });
+    }
+
+    res.status(200).json({ 
+      status: 'success', 
+      message: 'Discrepancy marked as resolved', 
+      transaction: result.rows[0],
+      notes: resolution_notes || 'Resolved by user',
+      resolved_by
+    });
+  } catch (err) {
+    console.error('Resolution error:', err);
+    res.status(500).json({ error: 'Failed to update transaction status' });
+  }
 });
 
 // ==========================================
@@ -362,10 +520,10 @@ cron.schedule('0 0 * * *', async () => {
               `INSERT INTO transactions (transaction_ref, customer_email, channel, gross_amount, fee, net_amount, status, merchant_id, created_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamp, NOW()))
                ON CONFLICT (transaction_ref) DO UPDATE SET
-                  status = EXCLUDED.status,
-                  gross_amount = EXCLUDED.gross_amount,
-                  fee = EXCLUDED.fee,
-                  net_amount = EXCLUDED.net_amount;`,
+                 status = EXCLUDED.status,
+                 gross_amount = EXCLUDED.gross_amount,
+                 fee = EXCLUDED.fee,
+                 net_amount = EXCLUDED.net_amount;`,
               [tx.reference || tx.id, tx.customer ? tx.customer.email : 'N/A', tx.channel || 'API', gross, fee, net, tx.status || 'success', merchant.id, tx.created_at]
             );
           }
@@ -378,4 +536,9 @@ cron.schedule('0 0 * * *', async () => {
   } catch (err) {
     console.error('[CRON] Execution error:', err);
   }
+});
+
+// Start Server (Must be at the very end)
+app.listen(PORT, () => {
+  console.log(`Reconciliation backend running securely on port ${PORT}`);
 });
