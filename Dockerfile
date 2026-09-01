@@ -1,19 +1,16 @@
-FROM node:20-alpine
-
-# Set working directory inside container
-WORKDIR /usr/src/app
-
-# Copy dependency definitions
+﻿FROM node:20-alpine AS base
+WORKDIR /app
 COPY package*.json ./
 
-# Install production dependencies only
+FROM base AS dependencies
 RUN npm ci --only=production
 
-# Copy application source files
+FROM base AS runner
+WORKDIR /app
+COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 
-# Expose Node app internal port
-EXPOSE 5000
+EXPOSE 3000
+ENV NODE_ENV=production
 
-# Start server
 CMD ["node", "server.js"]

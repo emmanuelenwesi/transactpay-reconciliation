@@ -1,6 +1,7 @@
-node_modules
+﻿node_modules
 npm-debug.log
-.env
+Dockerfile
+.dockerignore
 .git
-generate-ssl.js
-public/uploads/*
+.env
+coverage
