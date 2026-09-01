@@ -12,7 +12,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15
+        image: postgres:15-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgrespassword
@@ -21,9 +21,9 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
-          --health-interval 10s
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
 
     steps:
     - uses: actions/checkout@v4
@@ -36,6 +36,13 @@ jobs:
 
     - name: Install dependencies
       run: npm ci
+
+    - name: Wait for PostgreSQL
+      run: |
+        until docker exec ${{ job.services.postgres.id }} pg_isready; do
+          echo "Waiting for PostgreSQL..."
+          sleep 1
+        done
 
     - name: Run tests
       env:
