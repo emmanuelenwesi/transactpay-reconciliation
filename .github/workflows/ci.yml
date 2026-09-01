@@ -17,6 +17,7 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgrespassword
           POSTGRES_DB: transactpay_db
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -41,11 +42,11 @@ jobs:
       env:
         NODE_ENV: test
         PORT: 5001
-        DB_HOST: localhost
+        DB_HOST: 127.0.0.1
         DB_PORT: 5432
         DB_USER: postgres
         DB_PASSWORD: postgrespassword
         DB_NAME: transactpay_db
         JWT_SECRET: test_jwt_secret
         TRANSACTPAY_WEBHOOK_SECRET: test_webhook_secret_key
-      run: npm test
+      run: npm test -- --forceExit
