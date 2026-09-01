@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const csv = require('csv-parser');
 const { Readable } = require('stream');
+const PDFDocument = require('pdfkit');
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
@@ -12,6 +13,7 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 }
 });
 
+// POST /api/reconciliation/upload - Upload and reconcile settlement CSV
 router.post('/upload', authenticateToken, upload.single('settlement_file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Please upload a valid CSV settlement file.' });
@@ -152,6 +154,81 @@ router.post('/resolve', authenticateToken, async (req, res) => {
     return res.status(500).json({ error: 'Failed to resolve discrepancy.' });
   } finally {
     client.release();
+  }
+});
+
+// GET /api/reconciliation/export/csv - Export discrepancies as CSV
+router.get('/export/csv', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT pos_reference, amount, match_status, resolution_note, reconciled_at 
+       FROM pos_reconciliations 
+       WHERE match_status IN ('AMOUNT_MISMATCH', 'UNMATCHED', 'MANUALLY_MATCHED')
+       ORDER BY reconciled_at DESC`
+    );
+
+    let csvContent = 'POS Reference,Amount,Match Status,Resolution Note,Reconciled At\n';
+    result.rows.forEach(row => {
+      const ref = `"${row.pos_reference || ''}"`;
+      const amt = row.amount || 0;
+      const status = `"${row.match_status || ''}"`;
+      const note = `"${(row.resolution_note || '').replace(/"/g, '""')}"`;
+      const date = `"${row.reconciled_at ? row.reconciled_at.toISOString() : ''}"`;
+      csvContent += `${ref},${amt},${status},${note},${date}\n`;
+    });
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="discrepancy_report.csv"');
+    return res.status(200).send(csvContent);
+  } catch (err) {
+    console.error('CSV Export Error:', err);
+    return res.status(500).json({ error: 'Failed to generate CSV export.' });
+  }
+});
+
+// GET /api/reconciliation/export/pdf - Export discrepancies as PDF
+router.get('/export/pdf', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT pos_reference, amount, match_status, resolution_note, reconciled_at 
+       FROM pos_reconciliations 
+       WHERE match_status IN ('AMOUNT_MISMATCH', 'UNMATCHED', 'MANUALLY_MATCHED')
+       ORDER BY reconciled_at DESC`
+    );
+
+    const doc = new PDFDocument({ margin: 40 });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="discrepancy_report.pdf"');
+
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(20).text('TransactPay - Discrepancy Report', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(10).text(`Generated on: ${new Date().toUTCString()}`, { align: 'center' });
+    doc.moveDown(1.5);
+
+    // Summary Statistics
+    const total = result.rows.length;
+    doc.fontSize(12).text(`Total Discrepancies Recorded: ${total}`);
+    doc.moveDown(1);
+
+    // Table Content
+    result.rows.forEach((row, i) => {
+      doc.fontSize(10).text(
+        `${i + 1}. Reference: ${row.pos_reference} | Amount: ${row.amount} | Status: ${row.match_status}`
+      );
+      if (row.resolution_note) {
+        doc.fontSize(9).text(`   Note: ${row.resolution_note}`, { italic: true });
+      }
+      doc.moveDown(0.5);
+    });
+
+    doc.end();
+  } catch (err) {
+    console.error('PDF Export Error:', err);
+    return res.status(500).json({ error: 'Failed to generate PDF export.' });
   }
 });
 
