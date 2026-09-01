@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS merchants (
+﻿CREATE TABLE IF NOT EXISTS merchants (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
@@ -36,3 +36,7 @@ CREATE TABLE IF NOT EXISTS webhook_logs (
     status VARCHAR(50) NOT NULL DEFAULT 'PROCESSED',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+INSERT INTO merchants (id, name, email, password, secret_key)
+VALUES (1, 'Test Merchant', 'test@merchant.com', 'hashedpassword', 'test_webhook_secret_key')
+ON CONFLICT (id) DO NOTHING;
