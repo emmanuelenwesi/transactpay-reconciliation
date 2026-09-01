@@ -37,3 +37,8 @@ CREATE TABLE IF NOT EXISTS pos_reconciliations (
     match_status VARCHAR(50) NOT NULL,
     reconciled_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE pos_reconciliations 
+ADD COLUMN IF NOT EXISTS resolved_by INT REFERENCES merchants(id),
+ADD COLUMN IF NOT EXISTS resolution_note TEXT,
+ADD COLUMN IF NOT EXISTS transaction_id INT REFERENCES transactions(id);

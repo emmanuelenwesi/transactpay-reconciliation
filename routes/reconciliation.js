@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const csv = require('csv-parser');
@@ -6,11 +6,10 @@ const { Readable } = require('stream');
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
-// Configure multer to hold uploaded file in memory buffer
 const storage = multer.memoryStorage();
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 }
 });
 
 router.post('/upload', authenticateToken, upload.single('settlement_file'), async (req, res) => {
@@ -22,15 +21,13 @@ router.post('/upload', authenticateToken, upload.single('settlement_file'), asyn
   const parsedRecords = [];
 
   try {
-    // Stream buffer into csv-parser
     const stream = Readable.from(req.file.buffer);
 
     await new Promise((resolve, reject) => {
       stream
         .pipe(csv())
         .on('data', (row) => {
-          // Normalize common column naming variations in CSV files
-          const reference = row.reference || row.transaction_ref || row.Reference || row['Transaction Ref'];
+          const reference = row.reference || row.transaction_ref || row.Reference || row['TransactionRef'];
           const amount = parseFloat(row.amount || row.Gross || row.Amount || 0);
 
           if (reference) {
@@ -50,9 +47,7 @@ router.post('/upload', authenticateToken, upload.single('settlement_file'), asyn
     let unmatchedCount = 0;
     const summary = [];
 
-    // Auto-Matching Engine Execution
     for (const record of parsedRecords) {
-      // Find matching TransactPay webhook record in DB for this merchant
       const txResult = await pool.query(
         `SELECT * FROM transactions 
          WHERE merchant_id = $1 AND (reference = $2 OR transaction_ref = $2)`,
@@ -76,7 +71,6 @@ router.post('/upload', authenticateToken, upload.single('settlement_file'), asyn
         unmatchedCount++;
       }
 
-      // Record entry in pos_reconciliations table
       await pool.query(
         `INSERT INTO pos_reconciliations (pos_reference, amount, match_status)
          VALUES ($1, $2, $3)
@@ -105,6 +99,59 @@ router.post('/upload', authenticateToken, upload.single('settlement_file'), asyn
   } catch (err) {
     console.error('CSV Processing Error:', err);
     return res.status(500).json({ error: 'Failed to process settlement CSV file.' });
+  }
+});
+
+// POST /api/reconciliation/resolve - Manually resolve a discrepancy
+router.post('/resolve', authenticateToken, async (req, res) => {
+  const { reconciliationId, transactionId, note } = req.body;
+  const merchantId = req.user.id || req.user.merchant_id;
+
+  if (!reconciliationId || !transactionId) {
+    return res.status(400).json({ error: 'reconciliationId and transactionId are required.' });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const recResult = await client.query(
+      `SELECT * FROM pos_reconciliations WHERE id = $1`,
+      [reconciliationId]
+    );
+
+    if (recResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Reconciliation record not found.' });
+    }
+
+    await client.query(
+      `UPDATE pos_reconciliations 
+       SET match_status = 'MANUALLY_MATCHED', 
+           resolved_by = $1, 
+           resolution_note = $2, 
+           transaction_id = $3, 
+           reconciled_at = NOW() 
+       WHERE id = $4`,
+      [merchantId, note || 'Manually resolved by merchant', transactionId, reconciliationId]
+    );
+
+    await client.query(
+      `UPDATE transactions 
+       SET status = 'settled' 
+       WHERE id = $1 AND merchant_id = $2`,
+      [transactionId, merchantId]
+    );
+
+    await client.query('COMMIT');
+    return res.status(200).json({ message: 'Discrepancy resolved successfully.' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Resolution Error:', err);
+    return res.status(500).json({ error: 'Failed to resolve discrepancy.' });
+  } finally {
+    client.release();
   }
 });
 
