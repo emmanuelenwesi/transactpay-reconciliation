@@ -1,23 +1,22 @@
-name: Node.js CI
+﻿name: Node.js CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
 
 jobs:
-  build-and-test:
+  build:
     runs-on: ubuntu-latest
 
-    # 1. PostgreSQL Service Container Setup
     services:
       postgres:
-        image: postgres:15-alpine
+        image: postgres:15
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgrespassword
-          POSTGRES_DB: transactpay_test
+          POSTGRES_DB: transactpay_db
         ports:
           - 5432:5432
         options: >-
@@ -27,35 +26,24 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v3
 
-      - name: Use Node.js 20.x
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20.x
-          cache: 'npm'
+    - name: Use Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18.x'
+        cache: 'npm'
 
-      - name: Install Dependencies
-        run: npm ci
+    - name: Install dependencies
+      run: npm ci
 
-      # 2. Initialize Database Schema (if schema.sql exists)
-      - name: Initialize Database Schema
-        env:
-          PGPASSWORD: postgrespassword
-        run: |
-          if [ -f schema.sql ]; then
-            psql -h localhost -U postgres -d transactpay_test -f schema.sql
-          fi
-
-      # 3. Run Jest Integration Test Suite with Env Vars
-      - name: Run Test Suite
-        env:
-          NODE_ENV: test
-          PORT: 5001
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_USER: postgres
-          DB_PASSWORD: postgrespassword
-          DB_NAME: transactpay_test
-          JWT_SECRET: ci_test_jwt_secret_key_12345
-        run: npm test -- --forceExit
+    - name: Run tests
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_USER: postgres
+        DB_PASSWORD: postgrespassword
+        DB_NAME: transactpay_db
+        JWT_SECRET: test_jwt_secret
+        TRANSACTPAY_WEBHOOK_SECRET: test_webhook_secret_key
+      run: npm test
