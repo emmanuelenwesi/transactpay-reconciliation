@@ -2,41 +2,38 @@
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
-    secret_key VARCHAR(255) DEFAULT 'default_secret',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    password VARCHAR(255),
+    password_hash VARCHAR(255),
+    role VARCHAR(50) DEFAULT 'merchant',
+    environment VARCHAR(50) DEFAULT 'test',
+    secret_key VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
     id SERIAL PRIMARY KEY,
-    merchant_id INT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
-    reference VARCHAR(255) UNIQUE NOT NULL,
-    gross_amount DECIMAL(12, 2) NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    merchant_id INT REFERENCES merchants(id) ON DELETE CASCADE,
+    reference VARCHAR(255) UNIQUE,
+    transaction_ref VARCHAR(255),
+    amount NUMERIC(12, 2),
+    gross_amount NUMERIC(12, 2),
+    fee NUMERIC(12, 2) DEFAULT 0.00,
+    net_amount NUMERIC(12, 2) DEFAULT 0.00,
+    status VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS settlement_files (
+    id SERIAL PRIMARY KEY,
+    merchant_id INT REFERENCES merchants(id) ON DELETE CASCADE,
+    filename VARCHAR(255) NOT NULL,
+    processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS pos_reconciliations (
     id SERIAL PRIMARY KEY,
-    merchant_id INT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
-    file_name VARCHAR(255) NOT NULL,
-    total_records INT NOT NULL DEFAULT 0,
-    matched_records INT NOT NULL DEFAULT 0,
-    unmatched_records INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    pos_reference VARCHAR(255) UNIQUE NOT NULL,
+    amount NUMERIC(12, 2) NOT NULL,
+    match_status VARCHAR(50) NOT NULL,
+    reconciled_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE TABLE IF NOT EXISTS webhook_logs (
-    id SERIAL PRIMARY KEY,
-    merchant_id INT REFERENCES merchants(id) ON DELETE SET NULL,
-    event_type VARCHAR(100) NOT NULL DEFAULT 'transactpay.webhook',
-    payload JSONB NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'PROCESSED',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-INSERT INTO merchants (id, name, email, password, secret_key)
-VALUES (1, 'Test Merchant', 'test@merchant.com', 'hashedpassword', 'test_webhook_secret_key')
-ON CONFLICT (id) DO NOTHING;

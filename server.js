@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
@@ -23,8 +23,8 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/merchant', require('./routes/merchant'));
 app.use('/api/webhooks', require('./routes/webhooks'));
 app.use('/api/transactions', require('./routes/transactions'));
+app.use('/api/reconciliation', require('./routes/reconciliation'));
 app.use('/api', require('./routes/sync'));
-app.use('/api', require('./routes/reconciliation'));
 
 // 4. Centralized Global Error Handling
 app.use((err, req, res, next) => {
