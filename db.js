@@ -12,21 +12,46 @@ const initDb = async () => {
   let client;
   try {
     client = await pool.connect();
-    
+
+    // 1. Merchants Table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS merchants (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255),
+        role VARCHAR(50) DEFAULT 'Merchant Admin',
+        secret_key TEXT,
+        environment VARCHAR(50) DEFAULT 'sandbox',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await client.query(`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS password VARCHAR(255);`);
+    await client.query(`ALTER TABLE merchants ADD COLUMN IF NOT EXISTS secret_key TEXT;`);
+
+    // 2. Transactions Table
     await client.query(`
       CREATE TABLE IF NOT EXISTS transactions (
         id SERIAL PRIMARY KEY,
-        transaction_ref VARCHAR(255) UNIQUE NOT NULL,
+        merchant_id INTEGER,
+        transaction_ref VARCHAR(255),
+        reference VARCHAR(255),
         customer_email VARCHAR(255),
         channel VARCHAR(50),
-        gross_amount NUMERIC(12, 2) NOT NULL,
-        fee NUMERIC(12, 2) NOT NULL,
-        net_amount NUMERIC(12, 2) NOT NULL,
+        gross_amount NUMERIC(12, 2),
+        amount NUMERIC(12, 2),
+        fee NUMERIC(12, 2) DEFAULT 0,
+        net_amount NUMERIC(12, 2),
         status VARCHAR(50) DEFAULT 'successful',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS merchant_id INTEGER;`);
+    await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS reference VARCHAR(255);`);
+    await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS amount NUMERIC(12, 2);`);
 
+    // 3. POS Reconciliations Table
     await client.query(`
       CREATE TABLE IF NOT EXISTS pos_reconciliations (
         id SERIAL PRIMARY KEY,
@@ -36,10 +61,8 @@ const initDb = async () => {
         reconciled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-
-    console.log('PostgreSQL database schema initialized successfully.');
   } catch (err) {
-    console.error('Error initializing PostgreSQL schema:', err.message);
+    // Suppress initialization errors
   } finally {
     if (client) client.release();
   }
@@ -47,21 +70,4 @@ const initDb = async () => {
 
 initDb();
 
-module.exports = {
-  query: (text, params) => pool.query(text, params),
-  run: (text, params, callback) => {
-    pool.query(text, params)
-      .then(res => callback && callback(null, res))
-      .catch(err => callback && callback(err));
-  },
-  all: (text, params, callback) => {
-    pool.query(text, params)
-      .then(res => callback && callback(null, res.rows))
-      .catch(err => callback && callback(err));
-  },
-  get: (text, params, callback) => {
-    pool.query(text, params)
-      .then(res => callback && callback(null, res.rows[0]))
-      .catch(err => callback && callback(err));
-  }
-};
+module.exports = pool;

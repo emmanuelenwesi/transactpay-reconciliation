@@ -10,17 +10,52 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
+    # 1. PostgreSQL Service Container Setup
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: transactpay_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Use Node.js 20.x
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20.x
-        cache: 'npm'
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
 
-    - name: Install Dependencies
-      run: npm ci
+      - name: Install Dependencies
+        run: npm ci
 
-    - name: Run Test Suite
-      run: npm test
+      # 2. Initialize Database Schema (if schema.sql exists)
+      - name: Initialize Database Schema
+        env:
+          PGPASSWORD: postgrespassword
+        run: |
+          if [ -f schema.sql ]; then
+            psql -h localhost -U postgres -d transactpay_test -f schema.sql
+          fi
+
+      # 3. Run Jest Integration Test Suite with Env Vars
+      - name: Run Test Suite
+        env:
+          NODE_ENV: test
+          PORT: 5001
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USER: postgres
+          DB_PASSWORD: postgrespassword
+          DB_NAME: transactpay_test
+          JWT_SECRET: ci_test_jwt_secret_key_12345
+        run: npm test -- --forceExit

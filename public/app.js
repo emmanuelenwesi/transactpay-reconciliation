@@ -5,10 +5,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const authModalEl = document.getElementById('authModal');
   const authModal = authModalEl ? new bootstrap.Modal(authModalEl) : null;
 
+  const reconciliationRoutes = require('./routes/reconciliation');
   // UI Element References
   const merchantWelcome = document.getElementById('merchant-welcome');
   const btnSync = document.getElementById('btn-sync');
   const btnAuthAction = document.getElementById('btn-auth-action');
+  const btnSettings = document.getElementById('btn-settings');
   
   const metricGross = document.getElementById('metric-gross');
   const metricFees = document.getElementById('metric-fees');
@@ -19,6 +21,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchInput = document.getElementById('search-input');
   const alertBanner = document.getElementById('alert-banner');
   const btnExportCsv = document.getElementById('btn-export-csv');
+// Mount routes
+app.use('/api/auth', authRoutes);
+app.use('/api/webhooks', webhookRoutes);
+app.use('/api/transactions', transactionRoutes);
+
+// NEW: Mount reconciliation endpoint
+app.use('/api/reconciliation', reconciliationRoutes);
 
   // Modal / Auth References
   const authForm = document.getElementById('auth-form');
@@ -28,6 +37,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const toggleAuthMode = document.getElementById('toggle-auth-mode');
   const groupName = document.getElementById('group-name');
   const groupApiKeys = document.getElementById('group-api-keys');
+
+  // Settings Modal References
+  const settingsModalEl = document.getElementById('settingsModal');
+  const settingsForm = document.getElementById('settings-form');
+  const settingsAlert = document.getElementById('settings-alert');
 
   // Initialization & Session Management
   async function init() {
@@ -52,6 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
       merchantWelcome.style.display = 'inline';
     }
     if (btnSync) btnSync.style.display = 'inline';
+    if (btnSettings) btnSettings.style.display = 'inline-block';
     if (btnAuthAction) {
       btnAuthAction.innerText = 'Logout';
       btnAuthAction.removeAttribute('data-bs-toggle');
@@ -63,6 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function showLoggedOutState() {
     if (merchantWelcome) merchantWelcome.style.display = 'none';
     if (btnSync) btnSync.style.display = 'none';
+    if (btnSettings) btnSettings.style.display = 'none';
     if (btnAuthAction) {
       btnAuthAction.innerText = 'Login / Register';
       btnAuthAction.setAttribute('data-bs-toggle', 'modal');
@@ -168,8 +184,8 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         if (isRegisterMode) {
           const name = document.getElementById('auth-name').value;
-          const secretKey = document.getElementById('auth-secret-key').value;
-          const environment = document.getElementById('auth-environment').value;
+          const secretKey = document.getElementById('auth-secret-key').value || null;
+          const environment = document.getElementById('auth-environment').value || 'sandbox';
           await apiClient.register({ name, email, password, secretKey, environment });
         } else {
           await apiClient.login(email, password);
@@ -180,6 +196,42 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (err) {
         authError.innerText = err.message;
         authError.classList.remove('d-none');
+      }
+    });
+  }
+
+  // Settings Modal Logic
+  if (settingsModalEl) {
+    settingsModalEl.addEventListener('show.bs.modal', async () => {
+      try {
+        const data = await apiClient.getMerchantKeys();
+        document.getElementById('setting-current-key').value = data.maskedKey || 'None linked';
+        document.getElementById('setting-environment').value = data.environment || 'sandbox';
+      } catch (err) {
+        console.error('Error fetching keys:', err);
+      }
+    });
+  }
+
+  if (settingsForm) {
+    settingsForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const secretKey = document.getElementById('setting-secret-key').value;
+      const environment = document.getElementById('setting-environment').value;
+
+      try {
+        const res = await apiClient.saveMerchantKeys(secretKey, environment);
+        settingsAlert.className = 'alert alert-success';
+        settingsAlert.innerText = res.message;
+        settingsAlert.classList.remove('d-none');
+        document.getElementById('setting-secret-key').value = '';
+
+        const updated = await apiClient.getMerchantKeys();
+        document.getElementById('setting-current-key').value = updated.maskedKey;
+      } catch (err) {
+        settingsAlert.className = 'alert alert-danger';
+        settingsAlert.innerText = err.message;
+        settingsAlert.classList.remove('d-none');
       }
     });
   }
